@@ -4,81 +4,76 @@ sys.stdin = open("input.txt", "r", encoding="utf-8")
 from abc import ABC, abstractmethod
 from heapq import heappush, heappop
 
-
 # Algorithms
 # -----------------------------------------------
 class PathfindingStrategy(ABC):
     @abstractmethod
-    def find_path(self, map_obj, start, goal, is_walkable):
+    def find_path(self, map_obj, start, goal):
         pass
 
 class AStarStrategy(PathfindingStrategy):
     def heuristic(self, a, b):
-        return abs(a.x - b.x) + abs(a.y - b.y)  # Манхэттенская дистанция
+        # Манхэттенская эвристика
+        return abs(a.x - b.x) + abs(a.y - b.y)
 
-    def find_path(self, map_obj, start, goal, is_walkable):
-        # сброс значений, чтобы старые f/g не мешали
-        for row in map_obj.grid:
-            for cell in row:
-                cell.reset_path()
+    def find_path(self, map_obj, agent, goal):
+        # Сброс данных
+        map_obj.reset_path_data()
 
-
-        start_cell = map_obj.get_cell(*start)
-        goal_cell = map_obj.get_cell(*goal)
+        start = map_obj.get_cell(agent.x, agent.y)
+        end = map_obj.get_cell(goal.x, goal.y)
 
         open_list = []
-        closed = set()
 
-        start_cell.g = 0
-        start_cell.h = self.heuristic(start_cell, goal_cell)
-        start_cell.f = start_cell.g + start_cell.h
-        heappush(open_list, (start_cell.f, start_cell.x, start_cell.y, start_cell))  # <— вот так
+        # Инициализация старта
+        start.g = 0
+        start.h = self.heuristic(start, end)
+        start.f = start.g + start.h
+        heappush(open_list, (start.f, start))
 
+        # Основной цикл
         while open_list:
-            _, _, _, current = heappop(open_list)
-            if (current.x, current.y) in closed:
+            # 1. Берем ячейку с наименьшим f (если равны — меньший h)
+            current_f, current = heappop(open_list)
+            if current.is_closed:
                 continue
-            closed.add((current.x, current.y))
 
-            if current == goal_cell:
-                break  # нашли цель
+            current.is_closed = True
 
-            for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+            # 2. Проверка цели
+            if current.x == end.x and current.y == end.y:
+                # Восстановление пути: идем назад по parent
+                path = []
+                while current.parent:
+                    path.append(current)
+                    current = current.parent
+                path.reverse()
+                # Следующая ячейка после старта — ответ
+                next_cell = path[0] if path else end
+                return next_cell.x, next_cell.y
+
+            # 3. Перебираем соседей
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 nx, ny = current.x + dx, current.y + dy
                 neighbor = map_obj.get_cell(nx, ny)
-                if not neighbor or not is_walkable(neighbor):
+
+                if not neighbor or neighbor.is_closed:
                     continue
 
-                if neighbor.visited:
-                    new_g = current.g + 3  # штраф за возврат в уже посещённое место
-                else:
-                    new_g = current.g + 1
+                # если это не цель, то проверяем проходимость
+                if (nx, ny) != (end.x, end.y) and not neighbor.is_walkable():
+                    continue
 
-                if new_g < neighbor.g:
-                    neighbor.g = new_g
-                    neighbor.h = self.heuristic(neighbor, goal_cell)
+                tentative_g = current.g + 1
+
+                if tentative_g < neighbor.g or neighbor.parent is None:
+                    neighbor.g = tentative_g
+                    neighbor.h = self.heuristic(neighbor, end)
                     neighbor.f = neighbor.g + neighbor.h
                     neighbor.parent = current
-                    heappush(open_list, (neighbor.f, neighbor.x, neighbor.y, neighbor))
+                    heappush(open_list, (neighbor.f, neighbor))
 
-        # восстановление пути
-        path = []
-        cur = goal_cell
-        while cur and cur != start_cell:
-            path.append((cur.x, cur.y))
-            cur = cur.parent
-        path.reverse()
-        return path
-
-    def print_path_values(self):
-        for row in self.grid:
-            for c in row:
-                if c.f < float('inf'):
-                    print(f"{int(c.g):2}/{int(c.h):2}/{int(c.f):2}", end=" ")
-                else:
-                    print(" . ", end=" ")
-            print()
-        print()
+        return agent.x, agent.y
 # -----------------------------------------------
 
 
@@ -193,35 +188,19 @@ class FrodoAgent(Character):
             return None
 
         for _ in range(k):
-            x, y, symbol = input().split()
-            x, y = int(x), int(y)
-            obj = choose_type(symbol, x, y)
-
+            row, col, symbol = input().split()
+            row, col = int(row), int(col)
+            obj = choose_type(symbol, col, row)
             if obj:
-                self.map.place(obj, x, y)
+                self.map.place(obj, col, row)
                 self.map.place_perception(obj)
             elif symbol == 'P':
-                self.map.grid[x][y].set_danger(True)
+                self.map.grid[col][row].set_danger(True)
 
-    # --- планирование ---
-    def is_walkable(self, cell):
-        if cell.danger or isinstance(cell.character, Enemy):
-            return False
-        return True  # остальное — можно
 
     def next_move(self):
-        start = (self.x, self.y)
-        goal = (self.goal.x, self.goal.y)
-        path = self.pathfinder.find_path(self.map, start, goal, self.is_walkable)
-        if len(path) > 0:
-            nx, ny = path[0]
-            # избегаем шага в то место, где только что был
-            if hasattr(self, "last_pos") and (nx, ny) == self.last_pos:
-                if len(path) > 1:
-                    nx, ny = path[1]
-            self.last_pos = (self.x, self.y)
-            return nx, ny
-        return self.x, self.y
+        nx, ny = self.pathfinder.find_path(self.map, self, self.goal)
+        return nx, ny
 
     # --- движение ---
     def move(self, nx, ny):
@@ -238,16 +217,24 @@ class Cell:
         self.visited = False
         self.danger = False
 
-        self.g = float('inf')
+        self.g = 0
         self.h = 0
-        self.f = 0
+        self.f = self.g + self.h
         self.parent = None
+        self.is_closed = False
+
+    # --- планирование ---
+    def is_walkable(self):
+        if self.danger or isinstance(self.character, Enemy):
+            return False
+        return True
 
     def reset_path(self):
-        self.g = float('inf')
+        self.g = 0
         self.h = 0
-        self.f = 0
+        self.f = self.g + self.h
         self.parent = None
+        self.is_closed = False
 
     def change_character(self, new_character=None):
         if isinstance(new_character, FrodoAgent):
@@ -259,6 +246,12 @@ class Cell:
 
     def set_danger(self, value=True):
         self.danger = value
+
+    def __lt__(self, other):
+        # если f равны, выбираем по h (ближе к цели)
+        if self.f == other.f:
+            return self.h < other.h
+        return self.f < other.f
 
     def clear(self):
         self.character = None
@@ -281,7 +274,7 @@ class Cell:
 class Map:
     def __init__(self, agent=None, goal=None):
         self.size = 13
-        self.grid = [[Cell(x, y) for x in range(self.size)] for y in range(self.size)]
+        self.grid = [[Cell(i, j) for j in range(self.size)] for i in range(self.size)]
 
         self.place(agent, agent.x, agent.y)
 
@@ -294,6 +287,12 @@ class Map:
             cell = self.get_cell(x, y)
             if cell:
                 cell.set_danger(True)
+
+    # --- в Map ---
+    def reset_path_data(self):
+        for i in range(self.size):
+            for j in range(self.size):
+                self.grid[i][j].reset_path()
 
     def place(self, character, x, y):
         if character is None:
@@ -311,10 +310,10 @@ class Map:
         return None
 
     def print_map(self):
-        for i in range(self.size):
+        for y in range(self.size):
             row = []
-            for j in range(self.size):
-                row.append(self.grid[i][j].draw())
+            for x in range(self.size):
+                row.append(self.grid[x][y].draw())
             print(" ".join(row))
         print()
 
@@ -322,7 +321,7 @@ class Map:
 if __name__ == "__main__":
     variant = int(input())  # 1 или 2
     gx, gy = map(int, input().split())
-    frodo = FrodoAgent(variant, gx, gy)
+    frodo = FrodoAgent(variant, gy, gx)
 
     step = 0
     while True:
@@ -332,17 +331,12 @@ if __name__ == "__main__":
 
         print(f"\n=== Step {step}: perception ===")
         frodo.perceive(k)
-        # print("Map after perception:")
-        # frodo.map.print_map()
 
         nx, ny = frodo.next_move()
-        # frodo.map.print_path_values()
-        print(f"Frodo decided to move to: ({nx},{ny})")
+        print(f"Frodo decided to move to: ({ny},{nx})")
 
         frodo.move(nx, ny)
         print("\nAfter move:")
         frodo.map.print_map()
 
         step += 1
-
-    # frodo.map.print_map()
