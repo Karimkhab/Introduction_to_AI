@@ -4,6 +4,16 @@ sys.stdin = open("input.txt", "r", encoding="utf-8")
 from abc import ABC, abstractmethod
 from heapq import heappush, heappop
 
+class Colors:
+    RESET = '\033[0m'
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
+    GREY = '\033[90m'
 # Algorithms
 # -----------------------------------------------
 class PathfindingStrategy(ABC):
@@ -140,7 +150,7 @@ class Nazgul(Enemy):
 
 class MordorWatchtower(Enemy):
     def __init__(self, x=None, y=None):
-        super().__init__("Mordor Watchtower", x, y)
+        super().__init__("Watchtower", x, y)
         self.dirs = [(dx, dy) for dx in range(-2, 3) for dy in range(-2, 3) if not (dx == 0 and dy == 0)]
 
 # -----------------------------------------------
@@ -188,7 +198,16 @@ class FrodoAgent(Character):
             return None
 
         for _ in range(k):
-            row, col, symbol = input().split()
+            line = input().strip()
+
+            if line.startswith("My precious! Mount Doom is "):
+                parts = line.split()
+                row, col = int(parts[-2]), int(parts[-1])
+                self.goal = MountDoom(col, row)
+                self.map.place(self.goal, self.goal.x, self.goal.y)
+                continue
+
+            row, col, symbol = line.split()
             row, col = int(row), int(col)
             obj = choose_type(symbol, col, row)
             if obj:
@@ -202,7 +221,6 @@ class FrodoAgent(Character):
         nx, ny = self.pathfinder.find_path(self.map, self, self.goal)
         return nx, ny
 
-    # --- движение ---
     def move(self, nx, ny):
         self.map.place(self, nx, ny)
         self.x, self.y = nx, ny
@@ -223,7 +241,6 @@ class Cell:
         self.parent = None
         self.is_closed = False
 
-    # --- планирование ---
     def is_walkable(self):
         if self.danger or isinstance(self.character, Enemy):
             return False
@@ -253,18 +270,20 @@ class Cell:
             return self.h < other.h
         return self.f < other.f
 
-    def clear(self):
-        self.character = None
-        self.danger = False
-        self.visited = False
 
     def draw(self):
         if self.character:
-            return self.character.name[0]
+            name = self.character.name[0]
+            if name == 'F':  # Frodo
+                return f"{Colors.GREEN}{name}{Colors.RESET}"
+            if name == 'G' or name == 'M':  # Frodo
+                return f"{Colors.CYAN}{name}{Colors.RESET}"
+            else:  # Gollum
+                return f"{Colors.RED}{name}{Colors.RESET}"
         if self.danger:
-            return '#'
+            return f"{Colors.YELLOW}{'#'}{Colors.RESET}"
         if self.visited:
-            return '*'
+            return f"{Colors.BLUE}{'*'}{Colors.RESET}"
         return '.'
 
     def is_empty(self):
@@ -314,7 +333,7 @@ class Map:
             row = []
             for x in range(self.size):
                 row.append(self.grid[x][y].draw())
-            print(" ".join(row))
+            print("  ".join(row))
         print()
 
 
