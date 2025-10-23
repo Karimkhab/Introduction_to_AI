@@ -1,5 +1,5 @@
 import sys
-sys.stdin = open("input.txt", "r", encoding="utf-8")
+sys.stdin = open("/Users/karimkhabib/Documents/Innopolis/Second course (B25 - B26)/Introduction_to_AI/Test/input.txt", "r", encoding="utf-8")
 
 from abc import ABC, abstractmethod
 from heapq import heappush, heappop
@@ -60,7 +60,7 @@ class AStarStrategy(PathfindingStrategy):
                 path.reverse()
                 # Следующая ячейка после старта — ответ
                 next_cell = path[0] if path else end
-                return next_cell.x, next_cell.y
+                return next_cell.x, next_cell.y, len(path)
 
             # 3. Перебираем соседей
             for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
@@ -83,7 +83,7 @@ class AStarStrategy(PathfindingStrategy):
                     neighbor.parent = current
                     heappush(open_list, (neighbor.f, neighbor))
 
-        return agent.x, agent.y
+        return agent.x, agent.y, -1
 # -----------------------------------------------
 
 
@@ -107,6 +107,14 @@ class MithrilMail(Item):
 class OneRing(Item):
     def __init__(self, x=None, y=None):
         super().__init__("Ring", x, y)
+        self.allowed = False
+
+        if self.allowed:
+            self.state = False
+
+    def change_state(self, state):
+        if self.allowed:
+            self.state = state
 # -----------------------------------------------
 
 
@@ -177,52 +185,89 @@ class MountDoom(Goal):
 class FrodoAgent(Character):
     def __init__(self, radius, gollum_x, gollum_y):
         super().__init__("Frodo", 0, 0)
-        # Позиция и параметры
         self.radius = radius
         self.goal = Gollum(gollum_x, gollum_y)
-
-        self.map = Map(agent=self, goal=self.goal)
         self.pathfinder = AStarStrategy()
 
+        # Кольцо и состояние
+        self.has_mithril = False
+        self.ring_on = False
+
+        # Две карты
+        self.map_off = Map(agent=self, goal=self.goal, ring_on=False)
+        self.map_on = Map(agent=self, goal=self.goal, ring_on=True)
+
     # --- сенсорика ---
-    def perceive(self, k):
+    def perceive(self):
+        k = int(input())
+
         def choose_type(symbol, x=None, y=None):
-            if symbol == 'O': return OrcPatrol(x, y)
-            if symbol == 'U': return UrukHai(x, y)
-            if symbol == 'N': return Nazgul(x, y)
-            if symbol == 'W': return MordorWatchtower(x, y)
-            if symbol == 'G': return Gollum(x, y)
-            if symbol == 'M': return MountDoom(x, y)
-            if symbol == 'C': return MithrilMail(x, y)
-            if symbol == 'R': return OneRing(x, y)
-            return None
+            mapping = {
+                'O': OrcPatrol, 'U': UrukHai, 'N': Nazgul, 'W': MordorWatchtower,
+                'G': Gollum, 'M': MountDoom, 'C': MithrilMail, 'R': OneRing,
+            }
+            cls = mapping.get(symbol)
+            return cls(x, y) if cls else None
 
         for _ in range(k):
             line = input().strip()
-
-            if line.startswith("My precious! Mount Doom is "):
-                parts = line.split()
-                row, col = int(parts[-2]), int(parts[-1])
-                self.goal = MountDoom(col, row)
-                self.map.place(self.goal, self.goal.x, self.goal.y)
-                continue
-
             row, col, symbol = line.split()
             row, col = int(row), int(col)
             obj = choose_type(symbol, col, row)
             if obj:
-                self.map.place(obj, col, row)
-                self.map.place_perception(obj)
+                # ставим объект на обе карты
+                self.map_off.place(obj, col, row)
+                self.map_off.place_perception(obj)
+                self.map_on.place(obj, col, row)
+                self.map_on.place_perception(obj)
             elif symbol == 'P':
-                self.map.grid[col][row].set_danger(True)
+                self.map_off.grid[col][row].set_danger(True)
+                self.map_on.grid[col][row].set_danger(True)
 
+        # проверка на Галллума
+        if ((self.x, self.y) == (self.goal.x, self.goal.y)) and isinstance(self.goal, Gollum):
+            line = input().strip()
+            if line.startswith("My precious! Mount Doom is"):
+                parts = line.split()
+                row, col = int(parts[-2]), int(parts[-1])
+                self.goal = MountDoom(col, row)
+                self.map_off.place(self.goal, col, row)
+                self.map_on.place(self.goal, col, row)
+                print(f"Mount Doom revealed at ({row}, {col})")
 
     def next_move(self):
-        nx, ny = self.pathfinder.find_path(self.map, self, self.goal)
-        return nx, ny
+        # считаем путь на обеих картах
+        x_on, y_on, len_on = self.pathfinder.find_path(self.map_on, self, self.goal)
+        x_off, y_off, len_off = self.pathfinder.find_path(self.map_off, self, self.goal)
+
+        # если оба пути не найдены
+        if len_on == -1 and len_off == -1:
+            return self.x, self.y
+
+        # текущий state
+        current_state = "on" if self.ring_on else "off"
+
+        # логика выбора
+        if self.ring_on:
+            if len_off != -1 and (len_off < len_on):
+                print(">>> Decided to REMOVE Ring (rr)")
+                self.ring_on = False
+                print("rr")
+                return x_off, y_off
+            else:
+                return x_on, y_on
+        else:
+            if len_on != -1 and (len_on < len_off):
+                print(">>> Decided to WEAR Ring (r)")
+                self.ring_on = True
+                print("r")
+                return x_on, y_on
+            else:
+                return x_off, y_off
 
     def move(self, nx, ny):
-        self.map.place(self, nx, ny)
+        self.map_off.place(self, nx, ny)
+        self.map_on.place(self, nx, ny)
         self.x, self.y = nx, ny
 # -----------------------------------------------
 
@@ -291,20 +336,30 @@ class Cell:
 
 
 class Map:
-    def __init__(self, agent=None, goal=None):
+    def __init__(self, agent=None, goal=None, ring_on=False):
         self.size = 13
         self.grid = [[Cell(i, j) for j in range(self.size)] for i in range(self.size)]
-
-        self.place(agent, agent.x, agent.y)
-
-        self.place(goal, goal.x, goal.y)
+        self.ring_on = ring_on
+        if agent:
+            self.place(agent, agent.x, agent.y)
+        if goal:
+            self.place(goal, goal.x, goal.y)
 
     def place_perception(self, enemy):
         if not isinstance(enemy, Enemy):
             return
         for (x, y) in enemy.base_zone():
             cell = self.get_cell(x, y)
-            if cell:
+            if not cell:
+                continue
+            # логика зависит от состояния кольца:
+            if self.ring_on:
+                # Orc/Uruk становятся безопаснее, Nazgul/Watchtower опаснее
+                if isinstance(enemy, (OrcPatrol, UrukHai)):
+                    continue  # уменьшаем зону
+                else:
+                    cell.set_danger(True)
+            else:
                 cell.set_danger(True)
 
     # --- в Map ---
@@ -337,25 +392,34 @@ class Map:
         print()
 
 
+
+
 if __name__ == "__main__":
-    variant = int(input())  # 1 или 2
-    gx, gy = map(int, input().split())
-    frodo = FrodoAgent(variant, gy, gx)
+    # === 1. Инициализация ===
+    variant = int(input())  # perception radius
+    g_row, g_col = map(int, input().split())
+    frodo = FrodoAgent(variant, g_col, g_row)
 
     step = 0
-    while True:
-        k = int(input())
-        if k == -1:
-            break
+    print(f"\n=== Initialized: perception radius = {variant}, goal(Gollum) = ({g_row},{g_col}) ===")
 
+    # === 2. Главный цикл ===
+    while True:
         print(f"\n=== Step {step}: perception ===")
-        frodo.perceive(k)
+        frodo.perceive()
 
         nx, ny = frodo.next_move()
-        print(f"Frodo decided to move to: ({ny},{nx})")
+        print(f"Frodo decided to move to: ({ny}, {nx})")
+
+        # Здесь ты бы послал интерактору:
+        # print(f"m {ny} {nx}")  # формат интерактора (row, col)
+        # sys.stdout.flush()
+        # а потом он вернёт новые данные, и цикл продолжится
 
         frodo.move(nx, ny)
+
         print("\nAfter move:")
-        frodo.map.print_map()
+        frodo.map_off.print_map()
+        frodo.map_on.print_map()
 
         step += 1
