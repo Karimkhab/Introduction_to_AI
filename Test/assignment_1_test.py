@@ -1,131 +1,173 @@
-import sys
-from abc import ABC, abstractmethod
 from heapq import heappush, heappop
+import sys
+import select
 
-
-# Algorithms
-# -----------------------------------------------
-class PathfindingStrategy(ABC):
-    @abstractmethod
+"""Abstract base class for pathfinding algorithms"""
+class PathfindingStrategy():
     def find_path(self, map_obj, start, goal):
+        """Finds path from start to goal on the map"""
         pass
 
+class Node:
+    """Helper class that stores Cell reference and pathfinding data"""
+    def __init__(self, cell):
+        self.cell = cell          # reference to map Cell
+        self.g = float("inf")     # cost from start
+        self.h = 0                # heuristic cost to goal
+        self.f = 0                # total cost
+        self.parent = None        # previous Node in path
+        self.closed = False       # visited flag
 
+    def __lt__(self, other):
+        # for heapq priority queue
+        if self.f == other.f:
+            return self.h < other.h
+        return self.f < other.f
+"""A* pathfinding algorithm implementation for finding shortest paths"""
 class AStarStrategy(PathfindingStrategy):
     def heuristic(self, a, b):
+        """Calculates Manhattan distance between two cells for heuristic"""
         return abs(a.x - b.x) + abs(a.y - b.y)
 
     def find_path(self, map_obj, agent, goal):
+        """Finds shortest path from agent to goal using A* algorithm"""
         map_obj.reset_path_data()
-        start = map_obj.get_cell(agent.x, agent.y)
-        end = map_obj.get_cell(goal.x, goal.y)
-        open_list = []
 
+        start_cell = map_obj.get_cell(agent.x, agent.y)
+        end_cell = map_obj.get_cell(goal.x, goal.y)
+
+        # создаём словарь Node для всех клеток (чтобы хранить состояние поиска)
+        node_map = {(x, y): Node(map_obj.grid[x][y])
+                    for x in range(map_obj.size)
+                    for y in range(map_obj.size)}
+
+        start = node_map[(start_cell.x, start_cell.y)]
+        end = node_map[(end_cell.x, end_cell.y)]
+
+        open_list = []
         start.g = 0
-        start.h = self.heuristic(start, end)
+        start.h = self.heuristic(start.cell, end.cell)
         start.f = start.g + start.h
         heappush(open_list, (start.f, start))
 
         while open_list:
             current_f, current = heappop(open_list)
-            if current.is_closed:
+            if current.closed:
                 continue
-            current.is_closed = True
+            current.closed = True
 
-            if current.x == end.x and current.y == end.y:
+            # Check if reached goal
+            if current.cell.x == end.cell.x and current.cell.y == end.cell.y:
                 path = []
                 while current.parent:
-                    path.append(current)
+                    path.append(current.cell)
                     current = current.parent
                 path.reverse()
-                next_cell = path[0] if path else end
-                return next_cell.x, next_cell.y, len(path)
+                next_cell = path[0] if path else end.cell
+                return next_cell.x, next_cell.y
 
+            # Explore 4 directions
             for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                nx, ny = current.x + dx, current.y + dy
-                neighbor = map_obj.get_cell(nx, ny)
-                if not neighbor or neighbor.is_closed:
+                nx, ny = current.cell.x + dx, current.cell.y + dy
+                if not (0 <= nx < map_obj.size and 0 <= ny < map_obj.size):
                     continue
-                if (nx, ny) != (end.x, end.y) and not neighbor.is_walkable():
+
+                neighbor = node_map[(nx, ny)]
+                ncell = neighbor.cell
+                if neighbor.closed:
                     continue
+                # allow goal even if not walkable
+                if (nx, ny) != (end.cell.x, end.cell.y) and not ncell.is_walkable():
+                    continue
+
                 tentative_g = current.g + 1
                 if tentative_g < neighbor.g or neighbor.parent is None:
                     neighbor.g = tentative_g
-                    neighbor.h = self.heuristic(neighbor, end)
+                    neighbor.h = self.heuristic(ncell, end.cell)
                     neighbor.f = neighbor.g + neighbor.h
                     neighbor.parent = current
                     heappush(open_list, (neighbor.f, neighbor))
 
-        return agent.x, agent.y, -1
+        return agent.x, agent.y
 
 
-# -----------------------------------------------
-
-class Character:
+"""Base class for all characters in the game world"""
+class Object:
     def __init__(self, name="Unknown", x=None, y=None):
         self.name = name
         self.x = x
         self.y = y
 
 
-# Items
-# -----------------------------------------------
-class Item(Character):
-    pass
+class PerceptionZoneEnemy(Object):
+    def __init__(self, x=None, y=None):
+        super().__init__("Perception zone of enemy", x, y)
 
+"""Base class for all collectible items in the game"""
+class Item(Object):
+    def __init__(self,name="Unknown", x=None, y=None):
+        super().__init__(name, x, y)
+        self.has_agent = False
+    def change_has(self):
+        self.has_agent = True
 
+"""Mithril armor item that provides protection to Frodo"""
 class MithrilMail(Item):
     def __init__(self, x=None, y=None):
         super().__init__("Mithril", x, y)
 
-
+"""The One Ring item that makes Frodo invisible when worn"""
 class OneRing(Item):
     def __init__(self, x=None, y=None):
         super().__init__("Ring", x, y)
 
 
-# -----------------------------------------------
-
-# Abstract Enemy
-class Enemy(Character):
+"""Base class for all enemy types with detection zones"""
+class Enemy(Object):
     def __init__(self, name, x=None, y=None):
         super().__init__(name, x, y)
-        self.dirs = []
+        self.dirs = []  # Directions that define detection zone
 
     def base_zone(self):
+        """Returns coordinates of all cells in enemy's detection zone"""
         zone = []
         for dx, dy in self.dirs:
             zone.append((self.x + dx, self.y + dy))
         return zone
 
 
-# Enemies
-# -----------------------------------------------
+"""Orc enemy that can detect Frodo in 4 adjacent cells"""
 class OrcPatrol(Enemy):
     def __init__(self, x=None, y=None):
         super().__init__("Orc Patrol", x, y)
-        self.dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        self.dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # Up, down, left, right
 
 
+"""Uruk-hai enemy that can detect Frodo in cells within 2 steps"""
 class UrukHai(Enemy):
     def __init__(self, x=None, y=None):
-        super().__init__("UrukHai", x, y)
+        super().__init__("Uruk-Hai", x, y)
+        # Von Neumann neighborhood of radius 2
         for dx in range(-2, 3):
             for dy in range(-2, 3):
                 if abs(dx) + abs(dy) <= 2 and not (dx == 0 and dy == 0):
                     self.dirs.append((dx, dy))
 
 
+"""Nazgul enemy that can detect in 8 directions plus extended corners"""
 class Nazgul(Enemy):
     def __init__(self, x=None, y=None):
         super().__init__("Nazgul", x, y)
+        # Moore neighborhood of radius 1 plus extended corners
         self.dirs = [(dx, dy) for dx in range(-1, 2) for dy in range(-1, 2) if not (dx == 0 and dy == 0)]
         self.dirs += [(2, 2), (-2, 2), (2, -2), (-2, -2)]
 
 
+"""Watchtower enemy that can detect in all directions within 2 cells"""
 class MordorWatchtower(Enemy):
     def __init__(self, x=None, y=None):
         super().__init__("Watchtower", x, y)
+        # Moore neighborhood of radius 2
         self.dirs = [(dx, dy) for dx in range(-2, 3) for dy in range(-2, 3) if not (dx == 0 and dy == 0)]
 
 
@@ -133,312 +175,286 @@ class MordorWatchtower(Enemy):
 
 # Goal Characters
 # -----------------------------------------------
-class Gollum(Character):
+class Goal(Object):
+    pass
+
+"""Gollum Object that guides Frodo to Mount Doom"""
+class Gollum(Goal):
     def __init__(self, x=None, y=None):
         super().__init__("Gollum", x, y)
 
 
-class MountDoom(Character):
+"""Mount Doom - the final destination where Frodo must destroy the Ring"""
+class MountDoom(Goal):
     def __init__(self, x=None, y=None):
         super().__init__("Mount Doom", x, y)
 
 
 # -----------------------------------------------
 
+"""Represents a single cell in the 13x13 game map"""
 class Cell:
     def __init__(self, x, y):
         self.x = x
         self.y = y
-        self.character = None
-        self.visited = False
-        self.danger = False
-        self.g = 0
-        self.h = 0
-        self.f = 0
-        self.parent = None
-        self.is_closed = False
+        self.object = None  # who occupies this cell now
+
+        # must be a tuple for isinstance(...)
+        self.__danger_objects = (
+            PerceptionZoneEnemy, OrcPatrol, UrukHai, Nazgul, MordorWatchtower
+        )
+        self.danger = False  # this cell was observed as dangerous (P)
+
+    def change_object(self, new_object=None):
+        """Updates which character occupies this cell"""
+        # mark as dangerous only when we place P or an enemy directly
+        if isinstance(new_object, self.__danger_objects):
+            self.danger = True
+        self.object = new_object
 
     def is_walkable(self):
-        if self.danger or isinstance(self.character, Enemy):
+        """
+        Temporary simple rule:
+        - not walkable if there is an enemy on the cell
+        - not walkable if it was observed as 'P' (danger) now
+        - goals/items are walkable
+        """
+        if isinstance(self.object, (OrcPatrol, UrukHai, Nazgul, MordorWatchtower)):
+            return False
+        if self.danger:
             return False
         return True
 
-    def reset_path(self):
-        self.g = 0
-        self.h = 0
-        self.f = 0
-        self.parent = None
-        self.is_closed = False
-
-    def change_character(self, new_character=None):
-        if isinstance(new_character, FrodoAgent):
-            self.visited = True
-        self.character = new_character
-
-    def set_danger(self, value=True):
-        self.danger = value
-
-    def __lt__(self, other):
-        if self.f == other.f:
-            return self.h < other.h
-        return self.f < other.f
 
 
+"""
+Class Map Environment
+The map is a 13*13 grid, indexed by numbers in range of [0, 12] representing the world of Lord of the Rings.
+"""
 class Map:
-    def __init__(self, agent=None, goal=None, ring_on=False):
+    def __init__(self, agent):
         self.size = 13
         self.grid = [[Cell(i, j) for j in range(self.size)] for i in range(self.size)]
-        if agent:
-            self.place(agent, agent.x, agent.y)
-        if goal:
-            self.place(goal, goal.x, goal.y)
 
-    def update_danger_zones(self, ring_on, has_mithril):
-        for i in range(self.size):
-            for j in range(self.size):
-                self.grid[i][j].set_danger(False)
-
-        for i in range(self.size):
-            for j in range(self.size):
-                cell = self.grid[i][j]
-                if isinstance(cell.character, Enemy):
-                    danger_zone = self.calculate_current_danger_zone(cell.character, ring_on, has_mithril)
-                    for (x, y) in danger_zone:
-                        danger_cell = self.get_cell(x, y)
-                        if danger_cell:
-                            danger_cell.set_danger(True)
-
-    def calculate_current_danger_zone(self, enemy, ring_on, has_mithril):
-        base_cell = (enemy.x, enemy.y)
-
-        if isinstance(enemy, (OrcPatrol, UrukHai)):
-            if ring_on or has_mithril:
-                return [base_cell]
-            else:
-                return enemy.base_zone() + [base_cell]
-        elif isinstance(enemy, (Nazgul, MordorWatchtower)):
-            if ring_on:
-                zone = []
-                for dx in range(-2, 3):
-                    for dy in range(-2, 3):
-                        if max(abs(dx), abs(dy)) <= 2:
-                            zone.append((enemy.x + dx, enemy.y + dy))
-                return zone
-            else:
-                return enemy.base_zone() + [base_cell]
-        return enemy.base_zone() + [base_cell]
+        self.agent = agent
+        self.update_agent_position(agent.x, agent.y)
+        self.objects = []  # All objects on the map
 
     def reset_path_data(self):
-        for i in range(self.size):
-            for j in range(self.size):
-                self.grid[i][j].reset_path()
+        """Resets temporary pathfinding data (used by algorithms like A*)"""
+        # no persistent state yet, but this keeps compatibility
+        pass
 
-    def place(self, character, x, y):
-        if character is None:
-            return
-        if character.x is not None and character.y is not None:
-            self.grid[character.x][character.y].change_character(None)
-        self.grid[x][y].change_character(character)
-        character.x, character.y = x, y
+    def get_map_state(self, ring_on, has_mithril):
+        """Returns map possibly updated for current Ring/Mithril state"""
+        # если кольцо надето — временно игнорируем опасные зоны
+        if ring_on:
+            for row in self.grid:
+                for cell in row:
+                    cell.danger = False
+        # если есть мифрил — тоже ослабляем восприятие опасности
+        elif has_mithril:
+            for row in self.grid:
+                for cell in row:
+                    if cell.danger:
+                        cell.danger = False
+        return self
+
+    def place(self, x, y, object=None):
+        """Places a game object at specified coordinates"""
+        cell = self.grid[x][y]
+
+        cell.change_object(object)
+        self.objects.append(object)
+
+    def update_agent_position(self, new_x, new_y):
+        """Moves Frodo to new coordinates on the map"""
+        # Clear old position
+        old_cell = self.get_cell(self.agent.x, self.agent.y)
+        if old_cell and old_cell.object == self.agent:
+            old_cell.change_object()
+
+        # Set new position
+        new_cell = self.get_cell(new_x, new_y)
+        if new_cell:
+            new_cell.change_object(self.agent)
+
 
     def get_cell(self, x, y):
+        """Returns cell at coordinates, or None if out of bounds"""
         if 0 <= x < self.size and 0 <= y < self.size:
-            return self.grid[x][y]
+            cell = self.grid[x][y]
+            return cell
         return None
 
 
-class FrodoAgent(Character):
+class FrodoAgent(Object):
+    """
+    Class FrodoAgent represents the Frodo (Baggins)
+    Agent starts from the safe cell (0, 0)
+    Goal is to find the Ghollum
+    """
     def __init__(self, radius, gollum_x, gollum_y):
         super().__init__("Frodo", 0, 0)
         self.radius = radius
-        self.gollum = Gollum(gollum_x, gollum_y)
-        self.mount_doom = None
-        self.ring_on = False
-        self.has_mithril = False
-        self.gollum_found = False
-        self.mission_complete = False
-        self.steps_to_gollum = 0
-        self.total_steps = 0
+        self.mithril = MithrilMail()  # Does Frodo have a Mithril Mail-coat?
+        self.ring = OneRing()  #  Does Frodo have The One Ring?
 
-        self.map_off = Map(agent=self, goal=self.gollum, ring_on=False)
-        self.map_on = Map(agent=self, goal=self.gollum, ring_on=True)
-        self.pathfinder = AStarStrategy()
+        self.total_path = 0  # Total number of moves
+        
+        
+        self.gollum_found = False  # Has Frodo found Gollum?
 
-    def process_perception(self):
-        try:
-            first_line = input().strip()
-            if first_line.startswith("My precious!"):
-                parts = first_line.split()
-                x, y = int(parts[-2]), int(parts[-1])
-                self.mount_doom = MountDoom(x, y)
-                self.map_off.place(self.mount_doom, x, y)
-                self.map_on.place(self.mount_doom, x, y)
-                self.gollum_found = True
-                if self.steps_to_gollum == 0:
-                    self.steps_to_gollum = self.total_steps
-                return 0
-            return int(first_line)
-        except EOFError:
-            self.mission_complete = True
-            return -1
+        # Goals
+        self.goal = Gollum(gollum_x, gollum_y)  # Current goal
 
-    def perceive(self, k):
-        if k <= 0:
-            return
+        self.map = Map(self) # Map
+        self.map.place(self.goal.x, self.goal.y, self.goal)
+        self.pathfinder = AStarStrategy() # navigation
 
-        def choose_type(symbol, x=None, y=None):
-            mapping = {
-                'O': OrcPatrol, 'U': UrukHai, 'N': Nazgul, 'W': MordorWatchtower,
-                'G': Gollum, 'M': MountDoom, 'C': MithrilMail, 'R': OneRing,
-            }
-            cls = mapping.get(symbol)
-            return cls(x, y) if cls else None
+    def run_agent(self):
+        """Main game loop that runs for up to 200 turns"""
+        while True:
+            try:
+                # Read number of perception inputs
+                count = int(input())
 
-        for _ in range(k):
+                self.__perceive(count)
+
+                if self.__check_goal():
+                    break
+
+                # Checking if the goal has been completed
+
+
+                # Decide and execute next action
+                action = self.__decide_next_action()
+                self.__execute_action(action)
+
+            except:
+                # Handle errors and exit
+                print("e -1", flush=True)
+                return
+
+    def __perceive(self, count):
+        """Method goes through all perceptions that interactor has sent"""
+        for _ in range(count):
+            perception = input().split()
+            x, y, symbol = int(perception[0]), int(perception[1]), perception[2]
+
+            self.__explore_perception(x, y, symbol) # Process new information
+
+    def __explore_perception(self, x, y, symbol):
+        """Processes one perceived object and adds it to the map"""
+
+        def create_object(symbol):
+            """Creates game object from symbol character"""
+            if symbol == 'P': return PerceptionZoneEnemy(x, y)
+            if symbol == 'O': return OrcPatrol(x, y)
+            if symbol == 'U': return UrukHai(x, y)
+            if symbol == 'N': return Nazgul(x, y)
+            if symbol == 'W': return MordorWatchtower(x, y)
+            if symbol == 'C': return MithrilMail(x, y)
+
+            if symbol == 'M': return MountDoom(x, y)
+            if symbol == 'G': return Gollum(x, y)
+            return None
+
+        object = create_object(symbol)
+        if object:
+            self.map.place(x, y, object)
+
+
+
+    def __decide_next_action(self):
+        """Decides what action Frodo should take next"""
+        # Get current map state with updated danger zones
+        current_map = self.map.get_map_state(self.ring.has_agent, self.mithril.has_agent)
+
+        # Find path to current goal
+        next_x, next_y = self.pathfinder.find_path(current_map, self, self.goal)
+
+        # If no movement possible, try toggling the Ring
+        if (next_x, next_y) == (self.x, self.y):
+            # если реально в тупике (нет пути), только тогда пробуем кольцо
+            if not self.ring.has_agent:
+                return "r"
+            elif self.ring.has_agent:
+                return "rr"
+
+        # Otherwise move to next cell
+        return f"m {next_x} {next_y}"
+
+    def __execute_action(self, action):
+        """Executes the chosen action and updates game state"""
+        print(action, flush=True)
+
+        if action.startswith("m"):
+            _, x, y = action.split()
+            self.__move_to(int(x), int(y))
+
+
+        elif action in ("r", "rr"):
+            self.total_path += 1
+            # запрет на повторное включение/выключение — иначе "failed test"
+
+            if (action == "r" and self.ring.has_agent) or (action == "rr" and not self.ring.has_agent):
+                print("e -1", flush=True)
+
+                return
+
+            self.ring.has_agent = (action == "r")
+
+            # ОБЯЗАТЕЛЬНО читаем следующий блок восприятий
+
+            count = int(input())
+
+            self.__perceive(count)
+            self.map = self.map.get_map_state(self.ring.has_agent, self.mithril.has_agent)
+
+
+    def __move_to(self, x, y):
+        """Moves Frodo to new coordinates and updates path length"""
+        self.map.update_agent_position(x, y)
+        self.x, self.y = x, y
+        self.total_path += 1
+
+        cell = self.map.get_cell(x, y)
+        if isinstance(cell.object, MithrilMail):
+            self.mithril.has_agent = True
+
+    def __check_goal(self):
+        # Если цель — ГОЛЛУМ, и мы пришли на его координаты, читаем координаты Ородруина
+        if isinstance(self.goal, Gollum) and (self.x, self.y) == (self.goal.x, self.goal.y):
             line = input().strip()
-            parts = line.split()
-            if len(parts) < 3:
-                continue
+            nums = [int(tok) for tok in line.split() if tok.lstrip('-').isdigit()]
+            x, y = nums[-2], nums[-1]
+            self.goal = MountDoom(x, y)
+            self.map.place(x, y, self.goal)
+            self.total_path += 1  # <── добавь эту строку
+            return False
 
-            row, col, symbol = parts[0], parts[1], parts[2]
-            row, col = int(row), int(col)
-            obj = choose_type(symbol, col, row)
-
-            if obj:
-                self.map_off.place(obj, col, row)
-                self.map_off.update_danger_zones(False, self.has_mithril)
-                self.map_on.place(obj, col, row)
-                self.map_on.update_danger_zones(True, self.has_mithril)
-
-                if isinstance(obj, Gollum) and (self.x, self.y) == (obj.x, obj.y) and not self.gollum_found:
-                    self.gollum_found = True
-                    self.steps_to_gollum = self.total_steps
-
-    def should_toggle_ring(self, next_x, next_y):
-        current_goal = self.mount_doom if self.gollum_found else self.gollum
-        path_off = self.find_path_on_map(self.map_off, current_goal)
-        path_on = self.find_path_on_map(self.map_on, current_goal)
-
-        if path_off is None and path_on is not None and not self.ring_on:
-            return True
-        if path_on is None and path_off is not None and self.ring_on:
-            return True
-
-        if path_off and path_on:
-            len_off = len(path_off)
-            len_on = len(path_on)
-            threshold = 3
-
-            if not self.ring_on and len_on < (len_off - threshold):
-                return True
-            if self.ring_on and len_off < (len_on - threshold):
-                return True
-
-        target_cell_off = self.map_off.get_cell(next_x, next_y)
-        target_cell_on = self.map_on.get_cell(next_x, next_y)
-
-        if (target_cell_off and target_cell_off.danger and
-                target_cell_on and not target_cell_on.danger and
-                not self.ring_on):
-            return True
-
-        if (target_cell_on and target_cell_on.danger and
-                target_cell_off and not target_cell_off.danger and
-                self.ring_on):
+        # Если цель — MOUNT DOOM и мы на его координатах — финиш
+        if isinstance(self.goal, MountDoom) and (self.x, self.y) == (self.goal.x, self.goal.y):
+            # интерактор может прислать последнее восприятие (0)
+            if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
+                try:
+                    count = int(input().strip())
+                    for _ in range(count):
+                        _ = input().strip()
+                except:
+                    pass
+            print(f"e {self.total_path}", flush=True)
             return True
 
         return False
 
-    def find_path_on_map(self, map_obj, goal):
-        try:
-            nx, ny, path_len = self.pathfinder.find_path(map_obj, self, goal)
-            if path_len != -1:
-                return [(nx, ny)]
-            return None
-        except:
-            return None
-
-    def next_move(self):
-        current_goal = self.mount_doom if self.gollum_found else self.gollum
-
-        if self.ring_on:
-            current_map = self.map_on
-        else:
-            current_map = self.map_off
-
-        nx, ny, path_len = self.pathfinder.find_path(current_map, self, current_goal)
-
-        if path_len == -1:
-            return "e -1"
-
-        if self.should_toggle_ring(nx, ny):
-            return "rr" if self.ring_on else "r"
-
-        if (nx, ny) == (current_goal.x, current_goal.y):
-            if isinstance(current_goal, MountDoom):
-                total_path = self.calculate_total_path_length()
-                return f"e {total_path}"
-            return f"m {ny} {nx}"
-
-        return f"m {ny} {nx}"
-
-    def calculate_total_path_length(self):
-        # Вычисляем путь до Голлума + путь от Голлума до Горы
-        if self.steps_to_gollum == 0:
-            self.steps_to_gollum = self.total_steps
-
-        # Путь от Голлума до Горы вычисляем через A*
-        if self.gollum_found and self.mount_doom:
-            start = self.map_off.get_cell(self.gollum.x, self.gollum.y)
-            end = self.map_off.get_cell(self.mount_doom.x, self.mount_doom.y)
-            _, _, path_len = self.pathfinder.find_path(self.map_off, start, end)
-            if path_len != -1:
-                return self.steps_to_gollum + path_len
-
-        return self.total_steps  # fallback
-
-    def execute_action(self, action):
-        if action.startswith("m"):
-            parts = action.split()
-            x, y = int(parts[2]), int(parts[1])
-            self.move(x, y)
-            self.total_steps += 1
-        elif action == "r":
-            self.ring_on = True
-        elif action == "rr":
-            self.ring_on = False
-        elif action.startswith("e"):
-            self.mission_complete = True
-
-    def move(self, x, y):
-        self.map_off.place(self, x, y)
-        self.map_on.place(self, x, y)
-        self.x, self.y = x, y
-
-        current_cell_off = self.map_off.get_cell(x, y)
-        if current_cell_off and isinstance(current_cell_off.character, MithrilMail):
-            self.has_mithril = True
-
 
 if __name__ == "__main__":
-    # ⚠️ УБРАТЬ ЭТУ СТРОКУ ДЛЯ CODEFORCES!
-    # sys.stdin = open("input.txt", "r", encoding="utf-8")
-
-    variant = int(input().strip())
+    # Read initial game parameters
+    variant = int(input())
     gx, gy = map(int, input().split())
+
+    # Create and run Frodo agent
     frodo = FrodoAgent(variant, gx, gy)
-
-    k = frodo.process_perception()
-    if k > 0:
-        frodo.perceive(k)
-
-    while not frodo.mission_complete:
-        action = frodo.next_move()
-        print(action)
-        sys.stdout.flush()
-
-        frodo.execute_action(action)
-
-        k = frodo.process_perception()
-        if k > 0:
-            frodo.perceive(k)
+    frodo.run_agent()
